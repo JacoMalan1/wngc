@@ -54,12 +54,20 @@ impl<'t> Typed<'t> for Expr {
                 let left = match left.check(scope)? {
                     TypeInfo::Variable(info) => info.ty,
                     TypeInfo::Temporary(ty) => ty,
-                    TypeInfo::Function(_) => unreachable!(),
+                    TypeInfo::Function(_) => {
+                        return Err(TypeCheckError::InvalidOperation(
+                            "Can't add or subtract functions.".to_string(),
+                        ))
+                    }
                 };
                 let right = match right.check(scope)? {
                     TypeInfo::Variable(info) => info.ty,
                     TypeInfo::Temporary(ty) => ty,
-                    TypeInfo::Function(_) => unreachable!(),
+                    TypeInfo::Function(_) => {
+                        return Err(TypeCheckError::InvalidOperation(
+                            "Can't add or subtract functions.".to_string(),
+                        ))
+                    }
                 };
 
                 if left == right {
@@ -90,7 +98,11 @@ impl<'t> Typed<'t> for Expr {
                     let arg = match arg.check(scope)? {
                         TypeInfo::Variable(info) => info.ty,
                         TypeInfo::Temporary(ty) => ty,
-                        TypeInfo::Function(_) => unimplemented!(),
+                        TypeInfo::Function(_) => {
+                            return Err(TypeCheckError::InvalidOperation(
+                                "Can't pass function as argument in call.".to_string(),
+                            ))
+                        }
                     };
                     if arg != param {
                         return Err(TypeCheckError::TypeMismatch {
@@ -131,12 +143,20 @@ impl<'t> Typed<'t> for Cond {
                 let left = match left.check(scope)? {
                     TypeInfo::Variable(info) => info.ty,
                     TypeInfo::Temporary(ty) => ty,
-                    TypeInfo::Function(_) => unimplemented!(),
+                    TypeInfo::Function(_) => {
+                        return Err(TypeCheckError::InvalidOperation(
+                            "Can't check use function itself in boolean operation.".to_string(),
+                        ))
+                    }
                 };
                 let right = match right.check(scope)? {
                     TypeInfo::Variable(info) => info.ty,
                     TypeInfo::Temporary(ty) => ty,
-                    TypeInfo::Function(_) => unimplemented!(),
+                    TypeInfo::Function(_) => {
+                        return Err(TypeCheckError::InvalidOperation(
+                            "Can't check use function itself in boolean operation.".to_string(),
+                        ))
+                    }
                 };
 
                 if left == right {
@@ -319,13 +339,10 @@ impl<'ctx> CodeGen<'ctx> for Expr {
                     .as_any_value_enum())
             }
             Self::Call { ident, args } => {
-                println!("Generating call to {ident}");
                 let FunctionInfo { func_val, .. } = gen
                     .ftable()
                     .lookup(ident)
                     .ok_or(CodeGenError::UndefinedFunction(ident.clone()))?;
-
-                println!("{ident} has fn_value: {func_val:#?}");
 
                 let args = args
                     .clone()
@@ -378,12 +395,21 @@ impl<'t> Typed<'t> for Factor {
                 let left = match left.check(scope)? {
                     TypeInfo::Variable(info) => info.ty,
                     TypeInfo::Temporary(ty) => ty,
-                    TypeInfo::Function(_) => unreachable!(),
+                    TypeInfo::Function(_) => {
+                        return Err(TypeCheckError::InvalidOperation(
+                            "Can't multiply or divide a function.".to_string(),
+                        ))
+                    }
                 };
+
                 let right = match right.check(scope)? {
                     TypeInfo::Variable(info) => info.ty,
                     TypeInfo::Temporary(ty) => ty,
-                    TypeInfo::Function(_) => unreachable!(),
+                    TypeInfo::Function(_) => {
+                        return Err(TypeCheckError::InvalidOperation(
+                            "Can't multiply or divide by a function.".to_string(),
+                        ));
+                    }
                 };
 
                 if left == right {
@@ -395,9 +421,13 @@ impl<'t> Typed<'t> for Factor {
                     })
                 }
             }
-            Self::Call { .. } => {
-                todo!()
-            }
+            Self::Call { ident, .. } => match scope.lookup(ident) {
+                Some(TypeInfo::Function(info)) => Ok(TypeInfo::Temporary(info.return_type)),
+                None => Err(TypeCheckError::UndefinedSymbol(ident.clone())),
+                _ => Err(TypeCheckError::InvalidOperation(
+                    "Only functions can be called".to_string(),
+                )),
+            },
         }
     }
 }

@@ -69,18 +69,18 @@ impl<'t> Typed<'t> for FuncDecl {
             .map(|x| -> Vec<_> { x.into() })
             .unwrap_or_default();
 
+        scope.bind_func(
+            &self.ident,
+            params.iter().map(|p| p.ty).collect::<Vec<_>>().as_ref(),
+            self.ret,
+        );
+
         let mut local_scope = scope.enter();
         local_scope.clear_vars();
 
         for param in &params {
             local_scope.bind_var(&param.name, param.ty);
         }
-
-        local_scope.bind_func(
-            &self.ident,
-            params.iter().map(|p| p.ty).collect::<Vec<_>>().as_ref(),
-            self.ret,
-        );
 
         self.body.check(&mut local_scope)?;
 
@@ -156,7 +156,6 @@ impl<'ctx> CodeGen<'ctx> for FuncDecl {
         );
 
         self.body.codegen(gen, Some(&builder))?;
-        println!("Done generating code for `{}`.\n{fn_val}", self.ident);
         fn_val.verify(true);
         Ok(fn_val)
     }
@@ -214,17 +213,24 @@ impl<'t> Typed<'t> for Stat {
         match self {
             Self::Assign { lhs, rhs } => {
                 let lhs_ty = scope.lookup(lhs).map(|lhs| match lhs {
-                    TypeInfo::Variable(info) => info.clone(),
-                    _ => unimplemented!(),
+                    TypeInfo::Variable(info) => Ok(info.clone()),
+                    _ => Err(TypeCheckError::InvalidOperation(
+                        "Cannot assign to anything except a variable.".to_string(),
+                    )),
                 });
 
                 let rhs = match rhs.check(scope)? {
                     TypeInfo::Variable(info) => info.ty,
                     TypeInfo::Temporary(ty) => ty,
-                    TypeInfo::Function(_) => unreachable!(),
+                    TypeInfo::Function(_) => {
+                        return Err(TypeCheckError::InvalidOperation(
+                            "Can't assign function to a variable.".to_string(),
+                        ))
+                    }
                 };
 
                 if let Some(lhs) = lhs_ty {
+                    let lhs = lhs?;
                     if rhs == lhs.ty {
                         Ok(TypeInfo::Temporary(Type::Unit))
                     } else {
@@ -238,8 +244,54 @@ impl<'t> Typed<'t> for Stat {
                     Ok(TypeInfo::Temporary(Type::Unit))
                 }
             }
+            Self::If { cond, block } => {
+                cond.check(scope)?;
+                let mut local = scope.enter();
+                block.check(&mut local)?;
+                Ok(TypeInfo::Temporary(Type::Unit))
+            }
+            Self::IfElse {
+                cond,
+                true_block,
+                false_block,
+            } => {
+                cond.check(scope)?;
+                let mut local = scope.enter();
+                true_block.check(&mut local)?;
+                let mut local = scope.enter();
+                false_block.check(&mut local)?;
+                Ok(TypeInfo::Temporary(Type::Unit))
+            }
+            Self::For {
+                init,
+                cond,
+                inc,
+                block,
+            } => {
+                init.check(scope)?;
+                cond.check(scope)?;
+                inc.check(scope)?;
+                let mut local = scope.enter();
+                block.check(&mut local)?;
+                Ok(TypeInfo::Temporary(Type::Unit))
+            }
+            Self::Print(expr) => {
+                let expr = expr.check(scope)?;
+                if let TypeInfo::Function(_) = expr {
+                    return Err(TypeCheckError::InvalidOperation(
+                        "Can't print a function.".to_string(),
+                    ));
+                }
+
+                Ok(TypeInfo::Temporary(Type::Unit))
+            }
             Self::None => Ok(TypeInfo::Temporary(Type::Unit)),
-            _ => unimplemented!(),
+            Self::Return(expr) => {
+                if let Some(expr) = expr {
+                    expr.check(scope)?;
+                }
+                Ok(TypeInfo::Temporary(Type::Unit))
+            }
         }
     }
 }

@@ -37,7 +37,6 @@ fn main() {
     let name = &args[1].strip_suffix(".wng").unwrap().trim();
     match grammar::ProgParser::new().parse(&src) {
         Ok(val) => {
-            println!("{val:#?}");
             val.check(&mut TypeTable::empty())
                 .expect("Type checking failed");
             let gen = Box::leak(Box::new(Generator::new()));

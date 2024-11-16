@@ -97,6 +97,8 @@ pub enum TypeCheckError {
     TypeMismatch { expected: Type, found: Type },
     #[error("Undefined symbol `{0}`.")]
     UndefinedSymbol(String),
+    #[error("Invalid operation: {0}")]
+    InvalidOperation(String),
 }
 
 pub trait Typed<'t> {
