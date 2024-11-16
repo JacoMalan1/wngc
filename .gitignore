@@ -1,0 +1,7 @@
+/target
+*.ll
+*.o
+*.S
+*.wng
+.direnv
+test

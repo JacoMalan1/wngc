@@ -1,0 +1,110 @@
+use std::str::FromStr;
+use crate::ast::expr::{Expr, Exprs, Factor, Lit, Cond, Block};
+use crate::ast::func::{FuncDecl, ParamList, FuncBody, Param, Stats, Stat, Extern};
+use crate::ast::{Prog, Funcs};
+use crate::ty::Type;
+
+grammar;
+
+pub Prog: Prog = {
+  <Funcs?> => Prog { funcs: <> }
+};
+
+pub FuncDecl: FuncDecl = {
+  "fn" <s:Ident> "(" <params:ParamList> ")" <body:FuncBody> => FuncDecl { ident: s, param_list: Some(params), body, ret: Type::Unit },
+  "fn" <s:Ident> "(" <params:ParamList> ")" "->" <ret:Type> <body:FuncBody> => FuncDecl { ident: s, param_list: Some(params), body, ret },
+  "fn" <s:Ident> "()" <body:FuncBody> => FuncDecl { ident: s, param_list: None, body, ret: Type::Unit },
+  "fn" <s:Ident> "()" "->" <ret:Type> <body:FuncBody> => FuncDecl { ident: s, param_list: None, body, ret },
+  "fn" <s:Ident> "(" ")" <body:FuncBody> => FuncDecl { ident: s, param_list: None, body, ret: Type::Unit },
+  "fn" <s:Ident> "(" ")" "->" <ret:Type> <body:FuncBody> => FuncDecl { ident: s, param_list: None, body, ret },
+};
+
+pub Funcs: Box<Funcs> = {
+  <other:Funcs> <f:FuncDecl> => Box::new(Funcs { func: f, other: Some(other) }),
+  <FuncDecl> => Box::new(Funcs { func: <>, other: None}),
+};
+
+pub Ident: String = <s:r#"([a-z]|[A-Z]|_)+"#> => s.to_string();
+
+pub Expr: Box<Expr> = {
+  <l:Expr> "+" <r:Factor> => Box::new(Expr::Add{ left: l, right: r }),
+  <l:Expr> "-" <r:Factor> => Box::new(Expr::Sub{ left: l, right: r }),
+  <f:Ident> "(" <p:Exprs?> ")" => Box::new(Expr::Call { ident: f, args: p }),
+  <Lit> => Box::new(Expr::Lit(<>))
+};
+
+pub Cond: Cond = {
+  <l:Expr> "==" <r:Expr> => Cond::Equals { left: l, right: r },
+  <l:Expr> "!=" <r:Expr> => Cond::NotEqual { left: l, right: r },
+  <l:Expr> "<" <r:Expr> => Cond::Less { left: l, right: r },
+  <l:Expr> "<=" <r:Expr> => Cond::LessEqual { left: l, right: r },
+  <l:Expr> ">" <r:Expr> => Cond::Greater { left: l, right: r },
+  <l:Expr> ">=" <r:Expr> => Cond::GreaterEqual { left: l, right: r },
+  "(" <l:Cond> ")" "||" "(" <r:Cond> ")" => Cond::Or { left: Box::new(l), right: Box::new(r) },
+  "(" <l:Cond> ")" "&&" "(" <r:Cond> ")" => Cond::And { left: Box::new(l), right: Box::new(r) },
+};
+
+pub Exprs: Box<Exprs> = {
+  <other:Exprs> "," <e:Expr> => Box::new(Exprs { other: Some(other), expr: e }),
+  <e: Expr> => Box::new(Exprs { other: None, expr: e })
+};
+
+pub Factor: Box<Factor> = {
+  <l:Factor> "*" <r:Lit> => Box::new(Factor::Mul { left: l, right: r }),
+  <l:Factor> "/" <r:Lit> => Box::new(Factor::Div { left: l, right: r }),
+  <f:Ident> "(" <p:Exprs?> ")" => Box::new(Factor::Call { ident: f, args: p }),
+  <Lit> => Box::new(Factor::Lit(<>))
+};
+
+pub Lit: Lit = {
+  <NumLit> => Lit::Num(<>),
+  <Ident> => Lit::Ident(<>),
+  "true" => Lit::Bool(true),
+  "false" => Lit::Bool(false),
+  <s:r#""([a-z]|[A-Z]|\s|!|_|\")*""#> => Lit::Str(s[1..s.len() - 1].to_string())
+};
+
+NumLit: i32 = <s:r"[0-9]+"> => i32::from_str(s).unwrap();
+
+pub Extern: Extern = {
+  "extern" <s:Ident> "(" <params:ParamList?> ")" ";" => Extern { ident: s, param_list: params, ret: Type::Unit },
+  "extern" <s:Ident> "(" <params:ParamList?> ")" "->" <ret:Type> ";" => Extern { ident: s, param_list: params, ret },
+};
+
+pub ParamList: Box<ParamList> = {
+  <other:ParamList> "," <p:Param> => Box::new(ParamList { param: p, other: Some(other) }),
+  <Param> => Box::new(ParamList { param: <>, other: None }),
+};
+
+pub Param: Param = {
+  <ident:Ident> ":" <ty:Type> => Param { name: ident, ty: ty },
+};
+
+pub Stats: Box<Stats> = {
+  <other:Stats> <stat:Stat> => Box::new(Stats { stat: stat, other: Some(other) }),
+  <Stat> => Box::new(Stats { stat: <>, other: None })
+}
+
+pub Stat: Stat = {
+  <id:Ident> "=" <expr:Expr> ";" => Stat::Assign { lhs: id, rhs: expr },
+  "if" <c:Cond> <t:Block> => Stat::If { cond: c, block: t },
+  "if" <c:Cond> <t:Block> "else" <f:Block> => Stat::IfElse { cond: c, true_block: t, false_block: f },
+  "for" "(" <init:Stat> <c:Cond> ";" <inc:Stat> ")" <b:Block> => Stat::For { init: Box::new(init), cond: c, inc: Box::new(inc), block: b },
+  "print" <Expr> ";" => Stat::Print(<>),
+  "return" <e:Expr?> ";" => Stat::Return(e),
+  "none" ";" => Stat::None,
+};
+
+pub FuncBody: FuncBody = {
+  "{" <stats: Stats?> <expr: Expr?> "}" => FuncBody { stats, expr }
+};
+
+pub Type: Type = {
+  "Number" => Type::Number,
+  "String" => Type::Str,
+  "()" => Type::Unit,
+};
+
+pub Block: Box<Block> = {
+  "{" <stats:Stats?> "}" => Box::new(Block(stats))
+};
