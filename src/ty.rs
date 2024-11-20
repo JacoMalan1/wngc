@@ -6,21 +6,31 @@ use inkwell::{
 use std::{collections::HashMap, fmt::Display};
 use thiserror::Error;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+use crate::{ast::agg::Field, stable::StructTable};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
-    Number,
+    Int,
+    Float,
     Str,
     Bool,
+    Struct(String),
     Unit,
 }
 
 impl Type {
-    pub fn to_llvm_type(self, ctx: &Context) -> AnyTypeEnum<'_> {
+    pub fn to_llvm_type<'ctx>(
+        &self,
+        ctx: &'ctx Context,
+        stable: &StructTable<'ctx>,
+    ) -> Option<AnyTypeEnum<'ctx>> {
         match self {
-            Self::Number => ctx.i32_type().as_any_type_enum(),
-            Self::Str => ctx.ptr_type(AddressSpace::default()).as_any_type_enum(),
-            Self::Unit => ctx.void_type().as_any_type_enum(),
-            Self::Bool => ctx.bool_type().as_any_type_enum(),
+            Self::Int => Some(ctx.i32_type().as_any_type_enum()),
+            Self::Str => Some(ctx.ptr_type(AddressSpace::default()).as_any_type_enum()),
+            Self::Unit => Some(ctx.void_type().as_any_type_enum()),
+            Self::Bool => Some(ctx.bool_type().as_any_type_enum()),
+            Self::Float => Some(ctx.f64_type().as_any_type_enum()),
+            Self::Struct(name) => stable.lookup(name).map(|x| x.struct_ty.as_any_type_enum()),
         }
     }
 }
@@ -36,10 +46,16 @@ pub struct FuncTypeInfo {
     pub return_type: Type,
 }
 
+#[derive(Debug, Clone)]
+pub struct StructTypeInfo {
+    pub fields: Vec<Field>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct TypeTable {
     funcs: HashMap<String, FuncTypeInfo>,
     vars: HashMap<String, VariableTypeInfo>,
+    structs: HashMap<String, StructTypeInfo>,
 }
 
 #[derive(Debug, Clone)]
@@ -47,6 +63,7 @@ pub enum TypeInfo<'a> {
     Variable(&'a VariableTypeInfo),
     Temporary(Type),
     Function(&'a FuncTypeInfo),
+    Struct(&'a StructTypeInfo),
 }
 
 impl TypeTable {
@@ -79,11 +96,21 @@ impl TypeTable {
         )
     }
 
+    pub fn bind_struct(&mut self, ident: &str, fields: &[Field]) -> Option<StructTypeInfo> {
+        self.structs.insert(
+            ident.to_string(),
+            StructTypeInfo {
+                fields: Vec::from(fields),
+            },
+        )
+    }
+
     pub fn lookup<'a>(&'a self, ident: &str) -> Option<TypeInfo<'a>> {
         self.vars
             .get(ident)
             .map(TypeInfo::Variable)
             .or(self.funcs.get(ident).map(TypeInfo::Function))
+            .or(self.structs.get(ident).map(TypeInfo::Struct))
     }
 
     pub fn enter(&self) -> Self {
@@ -99,6 +126,10 @@ pub enum TypeCheckError {
     UndefinedSymbol(String),
     #[error("Invalid operation: {0}")]
     InvalidOperation(String),
+    #[error("Symbol `{0}` is already defined.")]
+    Redefinition(String),
+    #[error("Undefined type `{0}`.")]
+    UndefinedType(String),
 }
 
 pub trait Typed<'t> {
@@ -110,10 +141,12 @@ impl Display for Type {
         f.write_fmt(format_args!(
             "{}",
             match self {
-                Self::Number => "Number",
+                Self::Int => "Int",
                 Self::Str => "String",
                 Self::Unit => "()",
                 Self::Bool => "Bool",
+                Self::Float => "Float",
+                Self::Struct(name) => name,
             }
         ))
     }

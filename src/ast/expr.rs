@@ -1,4 +1,4 @@
-use super::func::Stats;
+use super::stat::Stats;
 use crate::{
     codegen::{CodeGen, CodeGenError},
     ftable::FunctionInfo,
@@ -52,20 +52,30 @@ impl<'t> Typed<'t> for Expr {
             Self::Lit(lit) => lit.check(scope),
             Self::Add { left, right } | Self::Sub { left, right } => {
                 let left = match left.check(scope)? {
-                    TypeInfo::Variable(info) => info.ty,
+                    TypeInfo::Variable(info) => info.ty.clone(),
                     TypeInfo::Temporary(ty) => ty,
                     TypeInfo::Function(_) => {
                         return Err(TypeCheckError::InvalidOperation(
                             "Can't add or subtract functions.".to_string(),
                         ))
                     }
+                    TypeInfo::Struct(_) => {
+                        return Err(TypeCheckError::InvalidOperation(
+                            "Can't add or subtract structs.".to_string(),
+                        ))
+                    }
                 };
                 let right = match right.check(scope)? {
-                    TypeInfo::Variable(info) => info.ty,
+                    TypeInfo::Variable(info) => info.ty.clone(),
                     TypeInfo::Temporary(ty) => ty,
                     TypeInfo::Function(_) => {
                         return Err(TypeCheckError::InvalidOperation(
                             "Can't add or subtract functions.".to_string(),
+                        ))
+                    }
+                    TypeInfo::Struct(_) => {
+                        return Err(TypeCheckError::InvalidOperation(
+                            "Can't add or subtract structs.".to_string(),
                         ))
                     }
                 };
@@ -96,11 +106,16 @@ impl<'t> Typed<'t> for Expr {
 
                 for (arg, param) in args.into_iter().zip(sig.params.into_iter()) {
                     let arg = match arg.check(scope)? {
-                        TypeInfo::Variable(info) => info.ty,
+                        TypeInfo::Variable(info) => info.ty.clone(),
                         TypeInfo::Temporary(ty) => ty,
                         TypeInfo::Function(_) => {
                             return Err(TypeCheckError::InvalidOperation(
                                 "Can't pass function as argument in call.".to_string(),
+                            ))
+                        }
+                        TypeInfo::Struct(_) => {
+                            return Err(TypeCheckError::InvalidOperation(
+                                "Can't pass struct as argument in call.".to_string(),
                             ))
                         }
                     };
@@ -141,20 +156,30 @@ impl<'t> Typed<'t> for Cond {
             | Self::LessEqual { left, right }
             | Self::GreaterEqual { left, right } => {
                 let left = match left.check(scope)? {
-                    TypeInfo::Variable(info) => info.ty,
+                    TypeInfo::Variable(info) => info.ty.clone(),
                     TypeInfo::Temporary(ty) => ty,
                     TypeInfo::Function(_) => {
                         return Err(TypeCheckError::InvalidOperation(
                             "Can't check use function itself in boolean operation.".to_string(),
                         ))
                     }
+                    TypeInfo::Struct(_) => {
+                        return Err(TypeCheckError::InvalidOperation(
+                            "Can't check use struct name in boolean operation.".to_string(),
+                        ))
+                    }
                 };
                 let right = match right.check(scope)? {
-                    TypeInfo::Variable(info) => info.ty,
+                    TypeInfo::Variable(info) => info.ty.clone(),
                     TypeInfo::Temporary(ty) => ty,
                     TypeInfo::Function(_) => {
                         return Err(TypeCheckError::InvalidOperation(
                             "Can't check use function itself in boolean operation.".to_string(),
+                        ))
+                    }
+                    TypeInfo::Struct(_) => {
+                        return Err(TypeCheckError::InvalidOperation(
+                            "Can't check use struct name in boolean operation.".to_string(),
                         ))
                     }
                 };
@@ -326,17 +351,33 @@ impl<'ctx> CodeGen<'ctx> for Expr {
                 let left = left.codegen(gen, Some(builder))?;
                 let right = right.codegen(gen, Some(builder))?;
 
-                Ok(builder
-                    .build_int_add(left.into_int_value(), right.into_int_value(), "")?
-                    .as_any_value_enum())
+                match (left, right) {
+                    (AnyValueEnum::IntValue(left), AnyValueEnum::IntValue(right)) => {
+                        Ok(builder.build_int_add(left, right, "")?.as_any_value_enum())
+                    }
+                    (AnyValueEnum::FloatValue(left), AnyValueEnum::FloatValue(right)) => {
+                        Ok(builder
+                            .build_float_add(left, right, "")?
+                            .as_any_value_enum())
+                    }
+                    _ => unimplemented!(),
+                }
             }
             Self::Sub { left, right } => {
                 let left = left.codegen(gen, Some(builder))?;
                 let right = right.codegen(gen, Some(builder))?;
 
-                Ok(builder
-                    .build_int_sub(left.into_int_value(), right.into_int_value(), "")?
-                    .as_any_value_enum())
+                match (left, right) {
+                    (AnyValueEnum::IntValue(left), AnyValueEnum::IntValue(right)) => {
+                        Ok(builder.build_int_sub(left, right, "")?.as_any_value_enum())
+                    }
+                    (AnyValueEnum::FloatValue(left), AnyValueEnum::FloatValue(right)) => {
+                        Ok(builder
+                            .build_float_sub(left, right, "")?
+                            .as_any_value_enum())
+                    }
+                    _ => unimplemented!(),
+                }
             }
             Self::Call { ident, args } => {
                 let FunctionInfo { func_val, .. } = gen
@@ -393,21 +434,31 @@ impl<'t> Typed<'t> for Factor {
             Self::Lit(lit) => lit.check(scope),
             Self::Mul { left, right } | Self::Div { left, right } => {
                 let left = match left.check(scope)? {
-                    TypeInfo::Variable(info) => info.ty,
+                    TypeInfo::Variable(info) => info.ty.clone(),
                     TypeInfo::Temporary(ty) => ty,
                     TypeInfo::Function(_) => {
                         return Err(TypeCheckError::InvalidOperation(
                             "Can't multiply or divide a function.".to_string(),
                         ))
                     }
+                    TypeInfo::Struct(_) => {
+                        return Err(TypeCheckError::InvalidOperation(
+                            "Can't multiply or divide a struct.".to_string(),
+                        ))
+                    }
                 };
 
                 let right = match right.check(scope)? {
-                    TypeInfo::Variable(info) => info.ty,
+                    TypeInfo::Variable(info) => info.ty.clone(),
                     TypeInfo::Temporary(ty) => ty,
                     TypeInfo::Function(_) => {
                         return Err(TypeCheckError::InvalidOperation(
                             "Can't multiply or divide by a function.".to_string(),
+                        ));
+                    }
+                    TypeInfo::Struct(_) => {
+                        return Err(TypeCheckError::InvalidOperation(
+                            "Can't multiply or divide by a struct.".to_string(),
                         ));
                     }
                 };
@@ -422,7 +473,7 @@ impl<'t> Typed<'t> for Factor {
                 }
             }
             Self::Call { ident, .. } => match scope.lookup(ident) {
-                Some(TypeInfo::Function(info)) => Ok(TypeInfo::Temporary(info.return_type)),
+                Some(TypeInfo::Function(info)) => Ok(TypeInfo::Temporary(info.return_type.clone())),
                 None => Err(TypeCheckError::UndefinedSymbol(ident.clone())),
                 _ => Err(TypeCheckError::InvalidOperation(
                     "Only functions can be called".to_string(),
@@ -447,17 +498,33 @@ impl<'ctx> CodeGen<'ctx> for Factor {
                 let left = left.codegen(gen, Some(builder))?;
                 let right = right.codegen(gen, Some(builder))?;
 
-                Ok(builder
-                    .build_int_mul(left.into_int_value(), right.into_int_value(), "")?
-                    .as_any_value_enum())
+                match (left, right) {
+                    (AnyValueEnum::IntValue(left), AnyValueEnum::IntValue(right)) => {
+                        Ok(builder.build_int_mul(left, right, "")?.as_any_value_enum())
+                    }
+                    (AnyValueEnum::FloatValue(left), AnyValueEnum::FloatValue(right)) => {
+                        Ok(builder
+                            .build_float_mul(left, right, "")?
+                            .as_any_value_enum())
+                    }
+                    _ => unimplemented!(),
+                }
             }
             Self::Div { left, right } => {
                 let left = left.codegen(gen, Some(builder))?;
                 let right = right.codegen(gen, Some(builder))?;
 
-                Ok(builder
-                    .build_int_signed_div(left.into_int_value(), right.into_int_value(), "")?
-                    .as_any_value_enum())
+                match (left, right) {
+                    (AnyValueEnum::IntValue(left), AnyValueEnum::IntValue(right)) => Ok(builder
+                        .build_int_signed_div(left, right, "")?
+                        .as_any_value_enum()),
+                    (AnyValueEnum::FloatValue(left), AnyValueEnum::FloatValue(right)) => {
+                        Ok(builder
+                            .build_float_div(left, right, "")?
+                            .as_any_value_enum())
+                    }
+                    _ => unimplemented!(),
+                }
             }
             Self::Call { ident, args } => Expr::Call {
                 ident: ident.clone(),
@@ -471,6 +538,7 @@ impl<'ctx> CodeGen<'ctx> for Factor {
 #[derive(Debug, Clone)]
 pub enum Lit {
     Num(i32),
+    Float(f64),
     Bool(bool),
     Ident(String),
     Str(String),
@@ -482,8 +550,9 @@ impl<'t> Typed<'t> for Lit {
         scope: &'t mut crate::ty::TypeTable,
     ) -> Result<crate::ty::TypeInfo<'t>, crate::ty::TypeCheckError> {
         match self {
-            Self::Num(_) => Ok(TypeInfo::Temporary(Type::Number)),
+            Self::Num(_) => Ok(TypeInfo::Temporary(Type::Int)),
             Self::Str(_) => Ok(TypeInfo::Temporary(Type::Str)),
+            Self::Float(_) => Ok(TypeInfo::Temporary(Type::Float)),
             Self::Bool(_) => Ok(TypeInfo::Temporary(Type::Bool)),
             Self::Ident(id) => scope
                 .lookup(id)
@@ -512,6 +581,7 @@ impl<'ctx> CodeGen<'ctx> for Lit {
                     false,
                 )
                 .as_any_value_enum()),
+            Self::Float(f) => Ok(gen.context().f64_type().const_float(*f).as_any_value_enum()),
             Self::Ident(id) => {
                 let builder = builder.ok_or(CodeGenError::NoBuilder)?;
                 let binding = gen
@@ -519,8 +589,12 @@ impl<'ctx> CodeGen<'ctx> for Lit {
                     .lookup(id)
                     .ok_or(CodeGenError::UndefinedVariable(id.clone()))?;
 
-                let ty: BasicTypeEnum<'_> =
-                    binding.ty.to_llvm_type(gen.context()).try_into().unwrap();
+                let ty: BasicTypeEnum<'_> = binding
+                    .ty
+                    .to_llvm_type(gen.context(), gen.stable())
+                    .unwrap()
+                    .try_into()
+                    .unwrap();
 
                 Ok(builder.build_load(ty, binding.val, "")?.into())
             }

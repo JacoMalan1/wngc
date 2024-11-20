@@ -19,3 +19,21 @@ pub fn create_printf<'ctx>(
         module,
     )
 }
+
+pub fn create_sqrt<'ctx>(
+    ctx: &'ctx Context,
+    module: Module<'ctx>,
+) -> (FunctionInfo<'ctx>, Module<'ctx>) {
+    (
+        FunctionInfo {
+            params: vec![Type::Float],
+            ret: Type::Float,
+            func_val: module.add_function(
+                "sqrt",
+                ctx.f64_type().fn_type(&[ctx.f64_type().into()], false),
+                None,
+            ),
+        },
+        module,
+    )
+}

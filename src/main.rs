@@ -16,6 +16,7 @@ pub(crate) mod codegen;
 pub(crate) mod ftable;
 pub(crate) mod imc;
 pub(crate) mod intrinsics;
+pub(crate) mod stable;
 pub(crate) mod ty;
 pub(crate) mod vtable;
 
@@ -55,7 +56,7 @@ fn main() {
                 .create_target_machine(
                     &triple,
                     "x86-64",
-                    "",
+                    "+sse2,+avx2",
                     OptimizationLevel::Aggressive,
                     RelocMode::PIC,
                     CodeModel::Default,
@@ -77,12 +78,17 @@ fn main() {
                 .unwrap();
 
             std::process::Command::new("clang")
-                .args(&["-O3".to_string(), format!("{name}.o"), format!("-o{name}")])
+                .args(&[
+                    "-O3".to_string(),
+                    format!("{name}.o"),
+                    format!("-o{name}"),
+                    "-lm".to_string(),
+                ])
                 .spawn()
                 .expect("Linking failed")
                 .wait()
                 .expect("Linking failed");
-            std::fs::remove_file(format!("{name}.o")).unwrap();
+            std::fs::remove_file(format!("{name}.o")).expect("Failed to remove object file.");
         }
         Err(lalrpop_util::ParseError::InvalidToken { location }) => {
             let frag = &src[location..]

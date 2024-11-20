@@ -1,4 +1,4 @@
-use crate::{ftable::FunctionTable, vtable::VariableTable};
+use crate::{ftable::FunctionTable, stable::StructTable, vtable::VariableTable};
 use inkwell::module::Module;
 use std::sync::{Mutex, MutexGuard};
 
@@ -6,6 +6,7 @@ pub struct Generator<'ctx> {
     ctx: inkwell::context::Context,
     vtable: VariableTable<'ctx>,
     ftable: FunctionTable<'ctx>,
+    stable: StructTable<'ctx>,
     module: Mutex<Option<Module<'ctx>>>,
 }
 
@@ -15,6 +16,7 @@ impl<'ctx> Generator<'ctx> {
             ctx: inkwell::context::Context::create(),
             vtable: VariableTable::empty(),
             ftable: FunctionTable::empty(),
+            stable: StructTable::empty(),
             module: Mutex::new(None),
         }
     }
@@ -42,5 +44,9 @@ impl<'ctx> Generator<'ctx> {
 
     pub fn ftable(&self) -> &FunctionTable<'ctx> {
         &self.ftable
+    }
+
+    pub fn stable(&self) -> &StructTable<'ctx> {
+        &self.stable
     }
 }
