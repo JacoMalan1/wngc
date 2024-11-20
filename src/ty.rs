@@ -1,3 +1,4 @@
+use crate::{ast::agg::Field, stable::StructTable};
 use inkwell::{
     context::Context,
     types::{AnyType, AnyTypeEnum},
@@ -5,8 +6,6 @@ use inkwell::{
 };
 use std::{collections::HashMap, fmt::Display};
 use thiserror::Error;
-
-use crate::{ast::agg::Field, stable::StructTable};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {

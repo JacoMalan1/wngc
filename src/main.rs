@@ -1,6 +1,7 @@
 #![warn(rust_2018_idioms, missing_debug_implementations, clippy::pedantic)]
 #![allow(clippy::too_many_lines, clippy::module_name_repetitions)]
 
+use clap::Parser;
 use codegen::CodeGen;
 use imc::Generator;
 use inkwell::{
@@ -11,6 +12,7 @@ use lalrpop_util::lalrpop_mod;
 use std::str::FromStr;
 use ty::{TypeTable, Typed};
 
+pub(crate) mod args;
 pub(crate) mod ast;
 pub(crate) mod codegen;
 pub(crate) mod ftable;
@@ -26,30 +28,38 @@ lalrpop_mod!(
 );
 
 fn main() {
-    let args = std::env::args().collect::<Vec<_>>();
-    if args.len() != 2 {
-        eprintln!("Usage: wngc <file>");
-        return;
-    }
+    let args = args::Arguments::parse();
 
     Target::initialize_x86(&InitializationConfig::default());
 
-    let src = std::fs::read_to_string(&args[1]).unwrap();
-    let name = &args[1].strip_suffix(".wng").unwrap().trim();
+    let src = std::fs::read_to_string(&args.file).unwrap();
+    let name = args
+        .file
+        .file_stem()
+        .expect("Failed to get file name")
+        .to_string_lossy();
+
     match grammar::ProgParser::new().parse(&src) {
         Ok(val) => {
-            val.check(&mut TypeTable::empty())
-                .expect("Type checking failed");
+            if let Err(err) = val.check(&mut TypeTable::empty()) {
+                println!("{err}");
+                return;
+            }
+
             let gen = Box::leak(Box::new(Generator::new()));
             val.codegen(gen, None).unwrap();
             let v = gen.module();
             let v_ref = v.as_ref().unwrap();
             let ir = v_ref.print_to_string();
-            std::fs::write(
-                std::path::PathBuf::from_str(&format!("{name}.ll")).unwrap(),
-                ir.to_bytes(),
-            )
-            .unwrap();
+
+            if args.emit_llvm_ir {
+                std::fs::write(
+                    std::path::PathBuf::from_str(&format!("{name}.ll")).unwrap(),
+                    ir.to_bytes(),
+                )
+                .unwrap();
+            }
+
             let triple = TargetTriple::create("x86_64-unknown-linux-gnu");
             let target = Target::from_triple(&triple).unwrap();
             let machine = target
@@ -62,6 +72,7 @@ fn main() {
                     CodeModel::Default,
                 )
                 .unwrap();
+
             machine
                 .write_to_file(
                     v_ref,
@@ -69,26 +80,40 @@ fn main() {
                     &std::path::PathBuf::from_str(&format!("{name}.o")).unwrap(),
                 )
                 .unwrap();
-            machine
-                .write_to_file(
-                    v_ref,
-                    FileType::Assembly,
-                    &std::path::PathBuf::from_str(&format!("{name}.S")).unwrap(),
-                )
+
+            std::process::Command::new("yasm")
+                .args(["-felf64", "-o", "main.o", "main.S"])
+                .spawn()
+                .unwrap()
+                .wait()
                 .unwrap();
 
-            std::process::Command::new("clang")
-                .args(&[
-                    "-O3".to_string(),
-                    format!("{name}.o"),
-                    format!("-o{name}"),
-                    "-lm".to_string(),
-                ])
+            let mut linker_args = vec![
+                format!("{name}.o"),
+                "main.o".to_string(),
+                "-o".to_string(),
+                name.to_string(),
+                "-lm".to_string(),
+                "-lc".to_string(),
+            ];
+
+            args.link_directories
+                .into_iter()
+                .for_each(|ld| linker_args.push(format!("-L{}", ld.to_string_lossy())));
+
+            args.link_libraries
+                .into_iter()
+                .for_each(|lib| linker_args.push(format!("-l{}", lib.trim())));
+
+            std::process::Command::new("ld")
+                .args(&linker_args)
                 .spawn()
                 .expect("Linking failed")
                 .wait()
                 .expect("Linking failed");
+
             std::fs::remove_file(format!("{name}.o")).expect("Failed to remove object file.");
+            std::fs::remove_file("main.o").expect("Failed to remove object file.");
         }
         Err(lalrpop_util::ParseError::InvalidToken { location }) => {
             let frag = &src[location..]
