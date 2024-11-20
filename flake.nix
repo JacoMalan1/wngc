@@ -13,14 +13,14 @@
   {
     devShells."${system}".default = pkgs.mkShell {
       packages = with pkgs; [
-        llvm_17
-        llvmPackages_17.libllvm
+        llvm_18
+        llvmPackages_18.libllvm
         libxml2
         libffi
       ];
 
       env = {
-        LLVM_SYS_170_PREFIX = "${pkgs.llvm_17.dev}";
+        LLVM_SYS_180_PREFIX = "${pkgs.llvm_18.dev}";
         CFLAGS = "-L${pkgs.libxml2}/lib -L${pkgs.libffi}/lib";
       };
     };
