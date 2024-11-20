@@ -5,3 +5,4 @@
 *.wng
 .direnv
 test
+!main.S
