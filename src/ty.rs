@@ -45,6 +45,7 @@ pub struct FuncTypeInfo {
     pub return_type: Type,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct StructTypeInfo {
     pub fields: Vec<Field>,
@@ -57,12 +58,13 @@ pub struct TypeTable {
     structs: HashMap<String, StructTypeInfo>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum TypeInfo<'a> {
     Variable(&'a VariableTypeInfo),
     Temporary(Type),
     Function(&'a FuncTypeInfo),
-    Struct(&'a StructTypeInfo),
+    Struct(StructTypeInfo),
 }
 
 impl TypeTable {
@@ -109,7 +111,7 @@ impl TypeTable {
             .get(ident)
             .map(TypeInfo::Variable)
             .or(self.funcs.get(ident).map(TypeInfo::Function))
-            .or(self.structs.get(ident).map(TypeInfo::Struct))
+            .or(self.structs.get(ident).cloned().map(TypeInfo::Struct))
     }
 
     pub fn enter(&self) -> Self {
@@ -129,6 +131,12 @@ pub enum TypeCheckError {
     Redefinition(String),
     #[error("Undefined type `{0}`.")]
     UndefinedType(String),
+    #[error("Struct `{name}` has {expected} fields, but {found} were supplied.")]
+    WrongFieldCount {
+        name: String,
+        expected: usize,
+        found: usize,
+    },
 }
 
 pub trait Typed<'t> {

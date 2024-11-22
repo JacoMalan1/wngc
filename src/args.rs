@@ -1,17 +1,21 @@
-use std::path::PathBuf;
+#![deny(missing_docs)]
 
 use clap::Parser;
+use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
-#[command(version, about)]
+#[command(version)]
 pub struct Arguments {
+    /// Output LLVM Intermediate Code to <FILE>.ll
     #[clap(long, short = 'R')]
     pub emit_llvm_ir: bool,
 
-    #[clap(short = 'l')]
+    /// Additional linker libraries
+    #[clap(short = 'l', value_name = "LIBRARY")]
     pub link_libraries: Vec<String>,
 
-    #[clap(short = 'L')]
+    /// Additional linker library directories
+    #[clap(short = 'L', value_name = "DIRECTORY")]
     pub link_directories: Vec<PathBuf>,
 
     /// Source file path

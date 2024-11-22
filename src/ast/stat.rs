@@ -1,4 +1,4 @@
-use super::expr::{Block, Cond, Expr, Lit};
+use super::expr::{Block, Cond, Expr, ExprValue, Lit};
 use crate::{
     codegen::{CodeGen, CodeGenError},
     ftable::FunctionInfo,
@@ -211,7 +211,7 @@ impl<'t> Typed<'t> for Stat {
 }
 
 impl<'ctx> CodeGen<'ctx> for Stat {
-    type Value = Option<inkwell::values::AnyValueEnum<'ctx>>;
+    type Value = Option<ExprValue<'ctx>>;
 
     fn codegen(
         &self,
@@ -347,7 +347,7 @@ impl<'ctx> CodeGen<'ctx> for Stat {
             }
             Self::Return(expr) => {
                 let val = if let Some(expr) = expr {
-                    let val = expr.codegen(gen, Some(builder))?;
+                    let val: AnyValueEnum<'_> = expr.codegen(gen, Some(builder))?.into();
                     let val: Box<dyn BasicValue<'_>> = match val {
                         AnyValueEnum::IntValue(v) => Box::new(v),
                         AnyValueEnum::PointerValue(v) => Box::new(v),
@@ -370,7 +370,7 @@ impl<'ctx> CodeGen<'ctx> for Stat {
                 Ok(None)
             }
             Self::Print(expr) => {
-                let expr_val = expr.codegen(gen, Some(builder))?;
+                let expr_val: AnyValueEnum<'_> = expr.codegen(gen, Some(builder))?.into();
                 let fmt = match &expr_val {
                     AnyValueEnum::IntValue(_) => "%d\n",
                     AnyValueEnum::FloatValue(_) => "%f\n",
@@ -389,24 +389,29 @@ impl<'ctx> CodeGen<'ctx> for Stat {
                 Ok(None)
             }
             Self::VariableDecl { ident, rhs, .. } => {
-                let rhs: BasicValueEnum<'_> = rhs.codegen(gen, Some(builder))?.try_into().unwrap();
-                let ptr = builder.build_alloca(rhs.get_type(), "")?;
-                builder.build_store(ptr, rhs)?;
+                let rhs = rhs.codegen(gen, Some(builder))?;
+                let rhs_basic_ty: BasicTypeEnum<'_> = rhs.get_type().try_into().unwrap();
+                let rhs_basic_val: BasicValueEnum<'_> = rhs.clone().try_into().unwrap();
+                let ptr = builder.build_alloca(rhs_basic_ty, "")?;
+                builder.build_store(ptr, rhs_basic_val)?;
 
                 gen.vtable().bind(
                     ident,
                     VariableInfo {
-                        ty: match rhs.get_type() {
-                            BasicTypeEnum::IntType(ty) => {
-                                if ty.get_bit_width() == 1 {
-                                    Type::Bool
-                                } else {
-                                    Type::Int
+                        ty: match rhs {
+                            ExprValue::StructLit(_, name) => Type::Struct(name),
+                            _ => match rhs.get_type().try_into().unwrap() {
+                                BasicTypeEnum::IntType(ty) => {
+                                    if ty.get_bit_width() == 1 {
+                                        Type::Bool
+                                    } else {
+                                        Type::Int
+                                    }
                                 }
-                            }
-                            BasicTypeEnum::FloatType(_) => Type::Float,
-                            BasicTypeEnum::PointerType(_) => Type::Str,
-                            _ => unreachable!(),
+                                BasicTypeEnum::FloatType(_) => Type::Float,
+                                BasicTypeEnum::PointerType(_) => Type::Str,
+                                _ => unreachable!(),
+                            },
                         },
                         val: ptr,
                     },

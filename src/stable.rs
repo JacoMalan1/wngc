@@ -1,13 +1,16 @@
 use inkwell::types::StructType;
 use std::{cell::RefCell, collections::HashMap};
 
+use crate::ast::agg::Field;
+
 #[derive(Debug)]
 pub struct StructTable<'ctx> {
     structs: RefCell<HashMap<String, StructInfo<'ctx>>>,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub struct StructInfo<'ctx> {
+    pub fields: Vec<Field>,
     pub struct_ty: StructType<'ctx>,
 }
 
@@ -23,6 +26,6 @@ impl<'ctx> StructTable<'ctx> {
     }
 
     pub fn lookup(&self, ident: &str) -> Option<StructInfo<'ctx>> {
-        self.structs.borrow().get(ident).copied()
+        self.structs.borrow().get(ident).cloned()
     }
 }

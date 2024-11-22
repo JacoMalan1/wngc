@@ -3,7 +3,7 @@ use crate::ast::expr::{Expr, Exprs, Factor, Lit, Cond, Block};
 use crate::ast::func::{FuncDecl, ParamList, FuncBody, Param, Extern};
 use crate::ast::stat::{Stats, Stat};
 use crate::ast::{Prog, Funcs, Item, Items};
-use crate::ast::agg::{StructDecl, Fields, Field};
+use crate::ast::agg::{StructDecl, Fields, Field, StructLit, FieldArgs, FieldArg};
 use crate::ty::Type;
 
 grammar;
@@ -44,6 +44,7 @@ pub Expr: Box<Expr> = {
   <l:Expr> "-" <r:Factor> => Box::new(Expr::Sub{ left: l, right: r }),
   <f:Ident> "(" <p:Exprs?> ")" => Box::new(Expr::Call { ident: f, args: p }),
   <f:Ident> "()" => Box::new(Expr::Call { ident: f, args: None }),
+  <l:Expr> "." <f:Ident> => Box::new(Expr::FieldAccess { left: l, field_name: f }),
   <Lit> => Box::new(Expr::Lit(<>))
 };
 
@@ -77,12 +78,27 @@ pub Lit: Lit = {
   <Ident> => Lit::Ident(<>),
   "true" => Lit::Bool(true),
   "false" => Lit::Bool(false),
-  <StrLit> => Lit::Str(<>)
+  <StrLit> => Lit::Str(<>),
+  <StructLit> => Lit::Struct(<>)
 };
 
 StrLit: String = <r#""([a-z]|[A-Z]|\s|!|_|\")*""#> => <>[1..<>.len() - 1].to_string();
 NumLit: i32 = <s:r"(-[1-9][0-9]*|[0-9]+)"> => i32::from_str(s).unwrap();
 FloatLit: f64 = <r"-?[0-9]+\.[0-9]+"> => f64::from_str(<>).unwrap();
+StructLit: StructLit = "{" <args:FieldArgs?> "}" <name:Ident> => StructLit { name, args };
+
+pub FieldArgs: Box<FieldArgs> = {
+  <others:FieldArgs> "," <arg:FieldArg> => Box::new(FieldArgs { others: Some(others), arg }),
+  <arg:FieldArg> => Box::new(FieldArgs { others: None, arg }),
+};
+
+pub FieldSpecifier: Box<Expr> = {
+  ":" <Expr> => <>,
+};
+
+pub FieldArg: FieldArg = {
+  <name:Ident> <spec:FieldSpecifier?> => FieldArg { field_name: name.clone(), expr: spec.unwrap_or(Box::new(Expr::Lit(Lit::Ident(name)))) },
+};
 
 pub Extern: Extern = {
   "extern" "fn" <s:Ident> "(" <params:ParamList?> ")" ";" => Extern { ident: s, param_list: params, ret: Type::Unit },

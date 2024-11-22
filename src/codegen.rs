@@ -8,6 +8,8 @@ pub enum CodeGenError {
     UndefinedVariable(String),
     #[error("No function `{0}` exists.")]
     UndefinedFunction(String),
+    #[error("No struct `{0}` exists.")]
+    UndefinedStruct(String),
     #[error("Type Error: Expected `{expected}`, found `{found}`")]
     Type { expected: String, found: String },
     #[error("{0}")]

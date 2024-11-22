@@ -1,13 +1,15 @@
-use super::stat::Stats;
+use super::{agg::StructLit, stat::Stats};
 use crate::{
     codegen::{CodeGen, CodeGenError},
     ftable::FunctionInfo,
-    ty::{Type, TypeCheckError, TypeInfo, Typed},
+    ty::{Type, TypeCheckError, TypeInfo, Typed, VariableTypeInfo},
 };
 use inkwell::{
     builder::Builder,
-    types::BasicTypeEnum,
-    values::{AnyValue, AnyValueEnum, IntValue},
+    types::{AnyType, AnyTypeEnum, BasicTypeEnum},
+    values::{
+        AnyValue, AnyValueEnum, BasicMetadataValueEnum, BasicValueEnum, IntValue, PointerValue,
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -43,6 +45,10 @@ pub enum Expr {
         args: Option<Box<Exprs>>,
     },
     Cond(Cond),
+    FieldAccess {
+        left: Box<Expr>,
+        field_name: String,
+    },
     Lit(Lit),
 }
 
@@ -130,6 +136,43 @@ impl<'t> Typed<'t> for Expr {
                 Ok(TypeInfo::Temporary(sig.return_type))
             }
             Self::Cond(cond) => cond.check(scope),
+            Self::FieldAccess { left, field_name } => {
+                let left = left.check(scope)?;
+                match left {
+                    TypeInfo::Temporary(Type::Struct(name)) => {
+                        let TypeInfo::Struct(info) = scope.lookup(&name).unwrap() else {
+                            return Err(TypeCheckError::InvalidOperation(
+                                "Field accessors only apply to structs.".to_string(),
+                            ));
+                        };
+                        let f = info
+                            .fields
+                            .iter()
+                            .find(|field| &field.name == field_name)
+                            .ok_or(TypeCheckError::UndefinedSymbol(field_name.clone()))?;
+                        Ok(TypeInfo::Temporary(f.ty.clone()))
+                    }
+                    TypeInfo::Variable(VariableTypeInfo {
+                        ty: Type::Struct(name),
+                    }) => {
+                        let name = name.clone();
+                        let TypeInfo::Struct(info) = scope.lookup(&name).unwrap() else {
+                            return Err(TypeCheckError::InvalidOperation(
+                                "Field accessors only apply to structs.".to_string(),
+                            ));
+                        };
+                        let f = info
+                            .fields
+                            .iter()
+                            .find(|field| &field.name == field_name)
+                            .ok_or(TypeCheckError::UndefinedSymbol(field_name.clone()))?;
+                        Ok(TypeInfo::Temporary(f.ty.clone()))
+                    }
+                    _ => Err(TypeCheckError::InvalidOperation(
+                        "Field accessors only apply to structs.".to_string(),
+                    )),
+                }
+            }
         }
     }
 }
@@ -336,8 +379,70 @@ impl<'ctx> CodeGen<'ctx> for Cond {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum ExprValue<'ctx> {
+    StructPointer(PointerValue<'ctx>, String),
+    StructLit(BasicValueEnum<'ctx>, String),
+    Other(AnyValueEnum<'ctx>),
+}
+
+impl<'ctx> ExprValue<'ctx> {
+    pub fn into_int_value(self) -> IntValue<'ctx> {
+        let any_val: AnyValueEnum<'_> = self.into();
+        any_val.into_int_value()
+    }
+
+    pub fn get_type(&self) -> AnyTypeEnum<'ctx> {
+        match self {
+            Self::StructPointer(ptr, _) => ptr.get_type().as_any_type_enum(),
+            Self::StructLit(val, _) => val.get_type().as_any_type_enum(),
+            Self::Other(val) => val.get_type(),
+        }
+    }
+}
+
+impl<'ctx> From<AnyValueEnum<'ctx>> for ExprValue<'ctx> {
+    fn from(value: AnyValueEnum<'ctx>) -> Self {
+        Self::Other(value)
+    }
+}
+
+impl<'ctx> From<BasicValueEnum<'ctx>> for ExprValue<'ctx> {
+    fn from(value: BasicValueEnum<'ctx>) -> Self {
+        Self::Other(value.as_any_value_enum())
+    }
+}
+
+impl<'ctx> From<ExprValue<'ctx>> for AnyValueEnum<'ctx> {
+    fn from(value: ExprValue<'ctx>) -> Self {
+        match value {
+            ExprValue::StructPointer(ptr, _) => ptr.as_any_value_enum(),
+            ExprValue::StructLit(val, _) => val.as_any_value_enum(),
+            ExprValue::Other(val) => val,
+        }
+    }
+}
+
+impl<'ctx> TryInto<BasicValueEnum<'ctx>> for ExprValue<'ctx> {
+    type Error = <AnyValueEnum<'ctx> as TryInto<BasicValueEnum<'ctx>>>::Error;
+
+    fn try_into(self) -> Result<BasicValueEnum<'ctx>, Self::Error> {
+        let any_val: AnyValueEnum<'_> = self.into();
+        any_val.try_into()
+    }
+}
+
+impl<'ctx> TryInto<BasicMetadataValueEnum<'ctx>> for ExprValue<'ctx> {
+    type Error = <AnyValueEnum<'ctx> as TryInto<BasicValueEnum<'ctx>>>::Error;
+
+    fn try_into(self) -> Result<BasicMetadataValueEnum<'ctx>, Self::Error> {
+        let any_val: AnyValueEnum<'_> = self.into();
+        any_val.try_into()
+    }
+}
+
 impl<'ctx> CodeGen<'ctx> for Expr {
-    type Value = AnyValueEnum<'ctx>;
+    type Value = ExprValue<'ctx>;
 
     fn codegen(
         &self,
@@ -346,20 +451,26 @@ impl<'ctx> CodeGen<'ctx> for Expr {
     ) -> Result<Self::Value, crate::codegen::CodeGenError> {
         let builder = builder.ok_or(CodeGenError::NoBuilder)?;
         match self {
-            Self::Lit(lit) => lit.codegen(gen, Some(builder)),
+            Self::Lit(lit) => Ok(lit.codegen(gen, Some(builder))?),
             Self::Add { left, right } => {
                 let left = left.codegen(gen, Some(builder))?;
                 let right = right.codegen(gen, Some(builder))?;
 
                 match (left, right) {
-                    (AnyValueEnum::IntValue(left), AnyValueEnum::IntValue(right)) => {
-                        Ok(builder.build_int_add(left, right, "")?.as_any_value_enum())
-                    }
-                    (AnyValueEnum::FloatValue(left), AnyValueEnum::FloatValue(right)) => {
-                        Ok(builder
-                            .build_float_add(left, right, "")?
-                            .as_any_value_enum())
-                    }
+                    (
+                        ExprValue::Other(AnyValueEnum::IntValue(left)),
+                        AnyValueEnum::IntValue(right),
+                    ) => Ok(builder
+                        .build_int_add(left, right, "")?
+                        .as_any_value_enum()
+                        .into()),
+                    (
+                        ExprValue::Other(AnyValueEnum::FloatValue(left)),
+                        AnyValueEnum::FloatValue(right),
+                    ) => Ok(builder
+                        .build_float_add(left, right, "")?
+                        .as_any_value_enum()
+                        .into()),
                     _ => unimplemented!(),
                 }
             }
@@ -368,14 +479,20 @@ impl<'ctx> CodeGen<'ctx> for Expr {
                 let right = right.codegen(gen, Some(builder))?;
 
                 match (left, right) {
-                    (AnyValueEnum::IntValue(left), AnyValueEnum::IntValue(right)) => {
-                        Ok(builder.build_int_sub(left, right, "")?.as_any_value_enum())
-                    }
-                    (AnyValueEnum::FloatValue(left), AnyValueEnum::FloatValue(right)) => {
-                        Ok(builder
-                            .build_float_sub(left, right, "")?
-                            .as_any_value_enum())
-                    }
+                    (
+                        ExprValue::Other(AnyValueEnum::IntValue(left)),
+                        AnyValueEnum::IntValue(right),
+                    ) => Ok(builder
+                        .build_int_sub(left, right, "")?
+                        .as_any_value_enum()
+                        .into()),
+                    (
+                        ExprValue::Other(AnyValueEnum::FloatValue(left)),
+                        AnyValueEnum::FloatValue(right),
+                    ) => Ok(builder
+                        .build_float_sub(left, right, "")?
+                        .as_any_value_enum()
+                        .into()),
                     _ => unimplemented!(),
                 }
             }
@@ -401,9 +518,43 @@ impl<'ctx> CodeGen<'ctx> for Expr {
 
                 Ok(builder
                     .build_call(func_val, &arg_vals, "")?
-                    .as_any_value_enum())
+                    .as_any_value_enum()
+                    .into())
             }
             Self::Cond(_) => unimplemented!(),
+            Self::FieldAccess { left, field_name } => {
+                let ExprValue::StructPointer(ptr, name) = left.codegen(gen, Some(builder))? else {
+                    panic!("Field access on non-pointer type.");
+                };
+
+                let info = gen.stable().lookup(&name).unwrap();
+
+                let (idx, field) = info
+                    .fields
+                    .iter()
+                    .enumerate()
+                    .find(|(_, field)| &field.name == field_name)
+                    .unwrap();
+
+                let field_ptr = builder.build_struct_gep(
+                    info.struct_ty,
+                    ptr,
+                    u32::try_from(idx).expect("Field index couldn't fit into u32."),
+                    "",
+                )?;
+
+                let field_ty: BasicTypeEnum<'_> = field
+                    .ty
+                    .to_llvm_type(gen.context(), gen.stable())
+                    .unwrap()
+                    .try_into()
+                    .unwrap();
+
+                Ok(builder
+                    .build_load(field_ty, field_ptr, "")?
+                    .as_any_value_enum()
+                    .into())
+            }
         }
     }
 }
@@ -493,20 +644,22 @@ impl<'ctx> CodeGen<'ctx> for Factor {
     ) -> Result<Self::Value, crate::codegen::CodeGenError> {
         let builder = builder.ok_or(CodeGenError::NoBuilder)?;
         match self {
-            Self::Lit(lit) => lit.codegen(gen, Some(builder)),
+            Self::Lit(lit) => Ok(lit.codegen(gen, Some(builder))?.into()),
             Self::Mul { left, right } => {
                 let left = left.codegen(gen, Some(builder))?;
                 let right = right.codegen(gen, Some(builder))?;
 
                 match (left, right) {
-                    (AnyValueEnum::IntValue(left), AnyValueEnum::IntValue(right)) => {
-                        Ok(builder.build_int_mul(left, right, "")?.as_any_value_enum())
-                    }
-                    (AnyValueEnum::FloatValue(left), AnyValueEnum::FloatValue(right)) => {
-                        Ok(builder
-                            .build_float_mul(left, right, "")?
-                            .as_any_value_enum())
-                    }
+                    (
+                        AnyValueEnum::IntValue(left),
+                        ExprValue::Other(AnyValueEnum::IntValue(right)),
+                    ) => Ok(builder.build_int_mul(left, right, "")?.as_any_value_enum()),
+                    (
+                        AnyValueEnum::FloatValue(left),
+                        ExprValue::Other(AnyValueEnum::FloatValue(right)),
+                    ) => Ok(builder
+                        .build_float_mul(left, right, "")?
+                        .as_any_value_enum()),
                     _ => unimplemented!(),
                 }
             }
@@ -515,22 +668,27 @@ impl<'ctx> CodeGen<'ctx> for Factor {
                 let right = right.codegen(gen, Some(builder))?;
 
                 match (left, right) {
-                    (AnyValueEnum::IntValue(left), AnyValueEnum::IntValue(right)) => Ok(builder
+                    (
+                        AnyValueEnum::IntValue(left),
+                        ExprValue::Other(AnyValueEnum::IntValue(right)),
+                    ) => Ok(builder
                         .build_int_signed_div(left, right, "")?
                         .as_any_value_enum()),
-                    (AnyValueEnum::FloatValue(left), AnyValueEnum::FloatValue(right)) => {
-                        Ok(builder
-                            .build_float_div(left, right, "")?
-                            .as_any_value_enum())
-                    }
+                    (
+                        AnyValueEnum::FloatValue(left),
+                        ExprValue::Other(AnyValueEnum::FloatValue(right)),
+                    ) => Ok(builder
+                        .build_float_div(left, right, "")?
+                        .as_any_value_enum()),
                     _ => unimplemented!(),
                 }
             }
-            Self::Call { ident, args } => Expr::Call {
+            Self::Call { ident, args } => Ok(Expr::Call {
                 ident: ident.clone(),
                 args: args.clone(),
             }
-            .codegen(gen, Some(builder)),
+            .codegen(gen, Some(builder))?
+            .into()),
         }
     }
 }
@@ -542,6 +700,7 @@ pub enum Lit {
     Bool(bool),
     Ident(String),
     Str(String),
+    Struct(StructLit),
 }
 
 impl<'t> Typed<'t> for Lit {
@@ -557,21 +716,19 @@ impl<'t> Typed<'t> for Lit {
             Self::Ident(id) => scope
                 .lookup(id)
                 .ok_or(crate::ty::TypeCheckError::UndefinedSymbol(id.clone())),
+            Self::Struct(lit) => lit.check(scope),
         }
     }
 }
 
 impl<'ctx> CodeGen<'ctx> for Lit {
-    type Value = inkwell::values::AnyValueEnum<'ctx>;
+    type Value = ExprValue<'ctx>;
 
     fn codegen(
         &self,
         gen: &'ctx crate::imc::Generator<'ctx>,
         builder: Option<&Builder<'ctx>>,
-    ) -> Result<Self::Value, crate::codegen::CodeGenError>
-    where
-        Self::Value: inkwell::values::AnyValue<'ctx>,
-    {
+    ) -> Result<Self::Value, crate::codegen::CodeGenError> {
         match self {
             Self::Num(n) => Ok(gen
                 .context()
@@ -580,8 +737,14 @@ impl<'ctx> CodeGen<'ctx> for Lit {
                     unsafe { std::mem::transmute::<i64, u64>(i64::from(*n)) },
                     false,
                 )
-                .as_any_value_enum()),
-            Self::Float(f) => Ok(gen.context().f64_type().const_float(*f).as_any_value_enum()),
+                .as_any_value_enum()
+                .into()),
+            Self::Float(f) => Ok(gen
+                .context()
+                .f64_type()
+                .const_float(*f)
+                .as_any_value_enum()
+                .into()),
             Self::Ident(id) => {
                 let builder = builder.ok_or(CodeGenError::NoBuilder)?;
                 let binding = gen
@@ -596,18 +759,27 @@ impl<'ctx> CodeGen<'ctx> for Lit {
                     .try_into()
                     .unwrap();
 
-                Ok(builder.build_load(ty, binding.val, "")?.into())
+                if let Type::Struct(name) = binding.ty {
+                    Ok(ExprValue::StructPointer(binding.val, name))
+                } else {
+                    Ok(builder.build_load(ty, binding.val, "")?.into())
+                }
             }
             Self::Str(s) => {
                 let builder = builder.ok_or(CodeGenError::NoBuilder)?;
                 let glob = builder.build_global_string_ptr(s, "")?;
-                Ok(glob.as_any_value_enum())
+                Ok(glob.as_any_value_enum().into())
             }
             Self::Bool(b) => Ok(gen
                 .context()
                 .bool_type()
                 .const_int(u64::from(*b), false)
-                .as_any_value_enum()),
+                .as_any_value_enum()
+                .into()),
+            Self::Struct(lit) => Ok(ExprValue::StructLit(
+                lit.codegen(gen, builder)?,
+                lit.name.clone(),
+            )),
         }
     }
 }
